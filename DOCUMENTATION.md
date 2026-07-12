@@ -7,24 +7,32 @@ This integration calculates the optimal EV charging power based on available sol
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  Home Assistant                                          │
-│                                                         │
-│  ┌──────────────┐         ┌──────────────────────────┐  │
-│  │ Input Sensors│────────▶│ ChargingPowerCoordinator │  │
-│  │  - grid_power│         │   (runs every 31s)       │  │
-│  │  - ev_power  │         └────────────┬─────────────┘  │
-│  │  - battery   │                      │                │
-│  │  - charging  │                      ▼                │
-│  └──────────────┘         ┌──────────────────────────┐  │
-│                           │ Output Entities           │  │
-│                           │  - setpoint_power (W)     │  │
-│                           │  - setpoint_ampere (A)    │  │
-│                           │  - surplus_power (W)      │  │
-│                           │  - charging_on (bool)     │  │
-│                           │  - is_1_phase (bool)      │  │
-│                           └──────────────────────────┘  │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│  Home Assistant                                                    │
+│                                                                    │
+│  ┌──────────────┐         ┌──────────────────────────┐            │
+│  │ Input Sensors│────────▶│ ChargingPowerCoordinator │            │
+│  │  - grid_power│         │   (runs every 31s)       │            │
+│  │  - ev_power  │         └────────────┬─────────────┘            │
+│  │  - battery   │                      │                          │
+│  │  - battery_soc────┐                 ▼                          │
+│  │  - charging  │    │    ┌──────────────────────────┐            │
+│  └──────────────┘    │    │ Output Entities           │            │
+│                      │    │  - setpoint_power (W)     │            │
+│  ┌───────────────┐   │    │  - setpoint_ampere (A)    │            │
+│  │ Curve Config  │───┘    │  - surplus_power (W)      │            │
+│  │  (breakpoints)│        │  - battery_reserve (W)    │            │
+│  └───────┬───────┘        │  - charging_on (bool)     │            │
+│          │                │  - is_1_phase (bool)      │            │
+│          │                └──────────────────────────┘            │
+│          │                                                        │
+│          ▼                ┌──────────────────────────┐            │
+│  ┌───────────────┐        │ Controls (device page)    │            │
+│  │ Lovelace Card │        │  - Reserve at 20% (slider)│            │
+│  │ (curve editor)│───────▶│  - Reserve at 50% (slider)│            │
+│  └───────────────┘  svc   │  - Reserve at 80% (slider)│            │
+│                           └──────────────────────────┘            │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ## Configuration Inputs
@@ -34,8 +42,9 @@ This integration calculates the optimal EV charging power based on available sol
 | `grid_power` | sensor | Grid power in Watts (positive = importing, negative = exporting) |
 | `ev_charging_power` | sensor | Current EV charging power in Watts |
 | `house_battery_power` | sensor | House battery charging power in Watts (positive = charging battery) |
+| `house_battery_soc` | sensor *(optional)* | Battery state of charge (0–100%). Enables the characteristic curve |
 | `current_charging_on` | binary_sensor / input_boolean | Whether the EV charger is currently active |
-| `max_charging_power_house_battery` | number (default: 2500 W) | Reserved power for house battery |
+| `max_charging_power_house_battery` | number (default: 2500 W) | Fallback reserve when SoC sensor is unavailable |
 | `min_charging_power_ev` | number (default: 1400 W) | Minimum EV charging power (~6A single phase) |
 | `fine_adjust` | number (default: 500 W) | Manual bias/offset to tweak the setpoint |
 
@@ -46,8 +55,12 @@ This integration calculates the optimal EV charging power based on available sol
 | Setpoint EV Charging Power | sensor | W | Recommended EV charging power |
 | Setpoint Ampere | sensor | A | Recommended current per phase |
 | Surplus Power Available | sensor | W | Calculated total surplus |
+| Battery Reserve Power | sensor | W | Current interpolated reserve from curve |
 | Setpoint Charging On | binary_sensor | — | Whether EV charging should be ON |
 | Is 1 Phase Charging | binary_sensor | — | Whether to use 1-phase (vs 3-phase) |
+| Reserve at 20% SoC | number | W | Slider control for curve breakpoint |
+| Reserve at 50% SoC | number | W | Slider control for curve breakpoint |
+| Reserve at 80% SoC | number | W | Slider control for curve breakpoint |
 
 ## Constants
 
@@ -74,10 +87,21 @@ FUNCTION calculate_surplus_and_setpoint():
     grid_power       ← read sensor (+ = importing from grid, − = exporting)
     ev_power         ← read sensor (current EV consumption)
     battery_power    ← read sensor (house battery charge power)
+    battery_soc      ← read sensor (house battery state of charge, 0–100%)
     charging_on      ← read sensor (is EV charger currently active?)
 
-    IF any input is unavailable:
+    IF any required input is unavailable:
         RETURN last known values (no update)
+
+    // ──────────────────────────────────────────────
+    // STEP 1b: Resolve battery reserve from curve
+    // ──────────────────────────────────────────────
+    IF battery_soc sensor is configured AND available:
+        battery_reserve ← INTERPOLATE(curve, battery_soc)
+        // Piecewise-linear interpolation between breakpoints
+        // Default curve: [[0,3000], [20,2500], [60,2000], [80,500], [100,500]]
+    ELSE:
+        battery_reserve ← max_battery_power (static fallback)
 
     // ──────────────────────────────────────────────
     // STEP 2: Calculate surplus power
@@ -115,15 +139,20 @@ FUNCTION calculate_surplus_and_setpoint():
 
     ELSE (charger IS active):
         // --- RUNNING condition ---
-        setpoint ← surplus − max_battery_power + fine_adjust
+        setpoint ← surplus − battery_reserve + fine_adjust
 
         // Explanation:
-        //   We subtract max_battery_power to "reserve" that capacity for the house battery.
+        //   battery_reserve comes from the characteristic curve (or static fallback).
+        //   We subtract it to "reserve" that capacity for the house battery.
         //   We add fine_adjust as a user-configurable bias.
         //
-        // Example:
-        //   surplus = 6000 W, max_battery = 2500 W, fine_adjust = 500 W
-        //   → setpoint = 6000 − 2500 + 500 = 4000 W for EV
+        // Example (battery at 30% SoC, curve gives reserve = 2400 W):
+        //   surplus = 6000 W, battery_reserve = 2400 W, fine_adjust = 500 W
+        //   → setpoint = 6000 − 2400 + 500 = 4100 W for EV
+        //
+        // Example (battery at 85% SoC, curve gives reserve = 500 W):
+        //   surplus = 6000 W, battery_reserve = 500 W, fine_adjust = 500 W
+        //   → setpoint = 6000 − 500 + 500 = 6000 W for EV (nearly all to car)
 
     // ──────────────────────────────────────────────
     // STEP 5: Apply minimum threshold & stop logic
@@ -178,6 +207,7 @@ FUNCTION calculate_surplus_and_setpoint():
     // ──────────────────────────────────────────────
     RETURN:
         surplus_power       → surplus
+        battery_reserve     → battery_reserve (interpolated from curve)
         setpoint_power      → max(0, setpoint) if charging_on, else 0
         setpoint_ampere     → ampere
         charging_on         → charging_on
@@ -198,11 +228,35 @@ This "reconstructs" total available solar by adding back what the EV and battery
 ### Setpoint (while charging)
 
 ```
-setpoint = surplus − max_battery_power + fine_adjust
+setpoint = surplus − battery_reserve + fine_adjust
 ```
 
-- **`−max_battery_power`**: Reserves capacity for the house battery to charge (priority over EV).
+- **`−battery_reserve`**: Reserves capacity for the house battery. When SoC is low, reserve is high (battery priority). When SoC is high, reserve is low (EV priority). Derived from the characteristic curve via piecewise-linear interpolation, or from the static `max_battery_power` fallback.
 - **`+fine_adjust`**: User-tunable offset. Positive = more aggressive (may pull small amounts from grid). Negative = more conservative (leaves more surplus unused).
+
+### Battery Reserve Curve
+
+The curve maps house battery SoC (%) → reserve power (W):
+
+```
+Reserve (W)
+3000 ┤●
+     │ ╲
+2500 ┤  ●─────────●
+     │             ╲
+2000 ┤              ●
+     │               ╲
+ 500 ┤                ●────●
+   0 ┼───┬───┬───┬───┬───┬───►
+     0   20  40  60  80  100  SoC (%)
+```
+
+**Interpolation**: For a SoC value between two breakpoints, the reserve is linearly interpolated.
+
+**Editing**: The curve can be modified via:
+1. Number entity sliders on the device page (fixed at 20%, 50%, 80% SoC)
+2. Visual Lovelace card with draggable breakpoints (unlimited points)
+3. Service call `charging_power_calculator.set_battery_reserve_curve`
 
 ### Hysteresis / Debouncing
 
@@ -227,16 +281,20 @@ The 500 W dead-band prevents oscillation when the surplus hovers around the swit
 
 ```
 charging_power_calculator/
-├── __init__.py          # HA entry setup/teardown
-├── coordinator.py       # Core algorithm (DataUpdateCoordinator)
-├── sensor.py            # Sensor entities (power, ampere, surplus)
+├── __init__.py          # HA entry setup, service registration, card auto-loading
+├── coordinator.py       # Core algorithm (DataUpdateCoordinator) + curve interpolation
+├── sensor.py            # Sensor entities (power, ampere, surplus, battery reserve)
 ├── binary_sensor.py     # Binary sensor entities (on/off, phase)
-├── config_flow.py       # UI configuration flow
+├── number.py            # Number entities (curve breakpoint sliders)
+├── config_flow.py       # UI configuration + options flow
 ├── const.py             # Constants and defaults
+├── services.yaml        # Service definitions
 ├── manifest.json        # Integration metadata
 ├── strings.json         # UI strings
-└── translations/
-    └── en.json          # English translations
+├── translations/
+│   └── en.json          # English translations
+└── www/
+    └── battery-reserve-curve-card.js  # Custom Lovelace card (auto-registered)
 ```
 
 ## Example Scenario
