@@ -9,6 +9,7 @@
           "ev_charging_power": "EV Charging Power Sensor",
           "house_battery_power": "House Battery Power Sensor",
           "current_charging_on": "Charging Active Sensor",
+          "house_battery_soc": "House Battery SoC Sensor",
           "max_charging_power_house_battery": "Max Battery Charging Power (W)",
           "min_charging_power_ev": "Min EV Charging Power (W)",
           "fine_adjust": "Fine Adjust Offset (W)"
@@ -18,7 +19,8 @@
           "ev_charging_power": "Current power consumption of the EV charger",
           "house_battery_power": "Current charging power of the house battery",
           "current_charging_on": "Binary sensor indicating if the charger is currently active",
-          "max_charging_power_house_battery": "Power to reserve for the house battery before allocating to EV",
+          "house_battery_soc": "Battery state of charge sensor (0-100%). If set, enables the characteristic curve for variable reserve power.",
+          "max_charging_power_house_battery": "Fallback reserve power when SoC sensor is unavailable or curve is not configured",
           "min_charging_power_ev": "Minimum power to start/maintain EV charging",
           "fine_adjust": "Manual offset to bias the charging setpoint (positive = more aggressive)"
         }
@@ -35,6 +37,7 @@
           "ev_charging_power": "EV Charging Power Sensor",
           "house_battery_power": "House Battery Power Sensor",
           "current_charging_on": "Charging Active Sensor",
+          "house_battery_soc": "House Battery SoC Sensor",
           "max_charging_power_house_battery": "Max Battery Charging Power (W)",
           "min_charging_power_ev": "Min EV Charging Power (W)",
           "fine_adjust": "Fine Adjust Offset (W)"
@@ -44,7 +47,8 @@
           "ev_charging_power": "Current power consumption of the EV charger",
           "house_battery_power": "Current charging power of the house battery",
           "current_charging_on": "Binary sensor indicating if the charger is currently active",
-          "max_charging_power_house_battery": "Power to reserve for the house battery before allocating to EV",
+          "house_battery_soc": "Battery state of charge sensor (0-100%). If set, enables the characteristic curve for variable reserve power.",
+          "max_charging_power_house_battery": "Fallback reserve power when SoC sensor is unavailable or curve is not configured",
           "min_charging_power_ev": "Minimum power to start/maintain EV charging",
           "fine_adjust": "Manual offset to bias the charging setpoint (positive = more aggressive)"
         }

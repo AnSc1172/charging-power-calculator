@@ -10,6 +10,7 @@ from .const import (
     CONF_FINE_ADJUST,
     CONF_GRID_POWER,
     CONF_HOUSE_BATTERY_POWER,
+    CONF_HOUSE_BATTERY_SOC,
     CONF_MAX_BATTERY_POWER,
     CONF_MIN_EV_POWER,
     DEFAULT_FINE_ADJUST,
@@ -45,6 +46,9 @@ class ChargingPowerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 ),
                 vol.Required(CONF_CURRENT_CHARGING_ON): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain=["binary_sensor", "input_boolean"])
+                ),
+                vol.Optional(CONF_HOUSE_BATTERY_SOC): selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain=["sensor"])
                 ),
                 vol.Optional(CONF_MAX_BATTERY_POWER, default=DEFAULT_MAX_BATTERY_POWER): selector.NumberSelector(
                     selector.NumberSelectorConfig(min=0, max=10000, step=100, unit_of_measurement="W")
@@ -100,6 +104,12 @@ class ChargingPowerOptionsFlow(config_entries.OptionsFlow):
                     default=current.get(CONF_CURRENT_CHARGING_ON),
                 ): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain=["binary_sensor", "input_boolean"])
+                ),
+                vol.Optional(
+                    CONF_HOUSE_BATTERY_SOC,
+                    description={"suggested_value": current.get(CONF_HOUSE_BATTERY_SOC)},
+                ): selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain=["sensor"])
                 ),
                 vol.Optional(
                     CONF_MAX_BATTERY_POWER,

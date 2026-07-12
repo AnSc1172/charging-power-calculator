@@ -8,7 +8,10 @@ from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 
 from .const import (
+    CONF_BATTERY_CURVE,
+    DEFAULT_BATTERY_CURVE,
     DOMAIN,
+    KEY_BATTERY_RESERVE,
     KEY_SETPOINT_AMPERE,
     KEY_SETPOINT_POWER,
     KEY_SURPLUS,
@@ -46,6 +49,10 @@ async def async_setup_entry(
                 "W",
                 entry.entry_id,
             ),
+            BatteryReserveSensor(
+                coordinator,
+                entry.entry_id,
+            ),
         ]
     )
 
@@ -76,6 +83,45 @@ class ChargingPowerSensor(CoordinatorEntity[ChargingPowerCoordinator], SensorEnt
     @property
     def native_value(self):
         return self.coordinator.data.get(self._key)
+
+    @property
+    def available(self) -> bool:
+        return bool(self.coordinator.data.get("available", True))
+
+
+class BatteryReserveSensor(CoordinatorEntity[ChargingPowerCoordinator], SensorEntity):
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: ChargingPowerCoordinator,
+        entry_id: str,
+    ) -> None:
+        super().__init__(coordinator)
+        self._attr_name = "Battery Reserve Power"
+        self._attr_native_unit_of_measurement = "W"
+        self._attr_unique_id = f"{entry_id}_{KEY_BATTERY_RESERVE}"
+        self._entry_id = entry_id
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry_id)},
+            name="Charging Power Calculator",
+            manufacturer="Custom",
+            entry_type=DeviceEntryType.SERVICE,
+        )
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get(KEY_BATTERY_RESERVE)
+
+    @property
+    def extra_state_attributes(self):
+        entry = self.coordinator.hass.config_entries.async_get_entry(self._entry_id)
+        curve = (
+            entry.data.get(CONF_BATTERY_CURVE, DEFAULT_BATTERY_CURVE)
+            if entry
+            else DEFAULT_BATTERY_CURVE
+        )
+        return {"curve": curve, "entry_id": self._entry_id}
 
     @property
     def available(self) -> bool:

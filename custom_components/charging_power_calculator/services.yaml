@@ -1,0 +1,16 @@
+set_battery_reserve_curve:
+  name: Set Battery Reserve Curve
+  description: Update the characteristic curve mapping battery SoC (%) to reserve power (W).
+  fields:
+    entry_id:
+      name: Config Entry ID
+      description: The config entry ID of the charging power calculator instance.
+      required: true
+      selector:
+        text:
+    curve:
+      name: Curve
+      description: List of [soc_percent, reserve_watts] breakpoints, e.g. [[0, 3000], [50, 2000], [100, 500]].
+      required: true
+      selector:
+        object:

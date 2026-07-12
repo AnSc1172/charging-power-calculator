@@ -15,16 +15,20 @@ from homeassistant.util import dt as dt_util
 from .const import (
     AMPERE_MAX,
     AMPERE_MIN,
+    CONF_BATTERY_CURVE,
     CONF_CURRENT_CHARGING_ON,
     CONF_EV_POWER,
     CONF_FINE_ADJUST,
     CONF_GRID_POWER,
     CONF_HOUSE_BATTERY_POWER,
+    CONF_HOUSE_BATTERY_SOC,
     CONF_MAX_BATTERY_POWER,
     CONF_MIN_EV_POWER,
+    DEFAULT_BATTERY_CURVE,
     DEFAULT_FINE_ADJUST,
     DEFAULT_MAX_BATTERY_POWER,
     DEFAULT_MIN_EV_POWER,
+    KEY_BATTERY_RESERVE,
     KEY_IS_1_PHASE,
     KEY_PHASE_COUNT,
     KEY_SETPOINT_AMPERE,
@@ -48,7 +52,7 @@ class InputSnapshot:
     ev_power: float
     house_battery_power: float
     current_charging_on: bool
-    max_battery_power: float
+    battery_reserve: float
     min_ev_power: float
     fine_adjust: float
 
@@ -72,6 +76,7 @@ class ChargingPowerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_setpoint_on = False
         self._last_setpoint_power = 0.0
         self._last_setpoint_ampere = 0
+        self._last_battery_reserve = 0.0
 
     async def _async_update_data(self) -> dict[str, Any]:
         now = dt_util.utcnow()
@@ -85,6 +90,7 @@ class ChargingPowerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 KEY_IS_1_PHASE: self._last_phase == 1,
                 KEY_SETPOINT_CHARGING_ON: self._last_setpoint_on,
                 KEY_PHASE_COUNT: self._last_phase,
+                KEY_BATTERY_RESERVE: self._last_battery_reserve,
             }
 
         surplus = (
@@ -92,6 +98,8 @@ class ChargingPowerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             + snapshot.house_battery_power
             + snapshot.ev_power
         )
+
+        self._last_battery_reserve = snapshot.battery_reserve
 
         if self._pause_until and now < self._pause_until:
             return {
@@ -102,6 +110,7 @@ class ChargingPowerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 KEY_IS_1_PHASE: self._last_phase == 1,
                 KEY_SETPOINT_CHARGING_ON: self._last_setpoint_on,
                 KEY_PHASE_COUNT: self._last_phase,
+                KEY_BATTERY_RESERVE: self._last_battery_reserve,
             }
 
         setpoint = 0.0
@@ -120,7 +129,7 @@ class ChargingPowerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 setpoint = snapshot.min_ev_power
         else:
             self._start_condition_since = None
-            setpoint = surplus - snapshot.max_battery_power + snapshot.fine_adjust
+            setpoint = surplus - snapshot.battery_reserve + snapshot.fine_adjust
 
         setpoint_on = self._last_setpoint_on
 
@@ -162,6 +171,7 @@ class ChargingPowerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             KEY_IS_1_PHASE: phase == 1,
             KEY_SETPOINT_CHARGING_ON: setpoint_on,
             KEY_PHASE_COUNT: phase,
+            KEY_BATTERY_RESERVE: self._last_battery_reserve,
         }
 
     def _read_inputs(self) -> InputSnapshot | None:
@@ -193,23 +203,63 @@ class ChargingPowerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         ):
             return None
 
-        max_battery_power = self._entry.data.get(
-            CONF_MAX_BATTERY_POWER, DEFAULT_MAX_BATTERY_POWER
-        )
         min_ev_power = self._entry.data.get(
             CONF_MIN_EV_POWER, DEFAULT_MIN_EV_POWER
         )
         fine_adjust = self._entry.data.get(CONF_FINE_ADJUST, DEFAULT_FINE_ADJUST)
+
+        battery_reserve = self._resolve_battery_reserve()
 
         return InputSnapshot(
             grid_power=grid_power,
             ev_power=ev_power,
             house_battery_power=house_battery_power,
             current_charging_on=current_charging_on,
-            max_battery_power=float(max_battery_power),
+            battery_reserve=battery_reserve,
             min_ev_power=float(min_ev_power),
             fine_adjust=float(fine_adjust),
         )
+
+    def _resolve_battery_reserve(self) -> float:
+        soc_entity = self._entry.data.get(CONF_HOUSE_BATTERY_SOC)
+        curve = self._entry.data.get(CONF_BATTERY_CURVE, DEFAULT_BATTERY_CURVE)
+
+        if not soc_entity:
+            return float(
+                self._entry.data.get(CONF_MAX_BATTERY_POWER, DEFAULT_MAX_BATTERY_POWER)
+            )
+
+        state = self.hass.states.get(soc_entity)
+        if state is None or state.state in ("unknown", "unavailable"):
+            return float(
+                self._entry.data.get(CONF_MAX_BATTERY_POWER, DEFAULT_MAX_BATTERY_POWER)
+            )
+
+        try:
+            soc = float(state.state)
+        except ValueError:
+            return float(
+                self._entry.data.get(CONF_MAX_BATTERY_POWER, DEFAULT_MAX_BATTERY_POWER)
+            )
+
+        return self._interpolate_curve(soc, curve)
+
+    @staticmethod
+    def _interpolate_curve(soc: float, curve: list[list[float]]) -> float:
+        if not curve:
+            return DEFAULT_MAX_BATTERY_POWER
+        curve = sorted(curve, key=lambda p: p[0])
+        if soc <= curve[0][0]:
+            return curve[0][1]
+        if soc >= curve[-1][0]:
+            return curve[-1][1]
+        for i in range(len(curve) - 1):
+            x0, y0 = curve[i]
+            x1, y1 = curve[i + 1]
+            if x0 <= soc <= x1:
+                t = (soc - x0) / (x1 - x0)
+                return y0 + t * (y1 - y0)
+        return curve[-1][1]
 
     def _decide_phase(self, setpoint: float, current_phase: int) -> int:
         if setpoint < PHASE_SWITCH_DOWN_W:
