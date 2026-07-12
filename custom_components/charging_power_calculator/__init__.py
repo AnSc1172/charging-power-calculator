@@ -19,7 +19,8 @@ from .const import (
 from .coordinator import ChargingPowerCoordinator
 
 CARD_URL = "/charging_power_calculator/battery-reserve-curve-card.js"
-CARD_PATH = Path(__file__).parent / "www" / "battery-reserve-curve-card.js"
+CARD_DIR = Path(__file__).parent / "www"
+CARD_FILENAME = "battery-reserve-curve-card.js"
 
 SERVICE_SCHEMA_SET_CURVE = vol.Schema(
     {
@@ -40,11 +41,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    # Serve the Lovelace card JS and auto-register it in the frontend
-    await hass.http.async_register_static_paths(
-        [StaticPathConfig(CARD_URL, str(CARD_PATH), cache_headers=False)]
-    )
-    add_extra_js_url(hass, CARD_URL)
+    # Serve the Lovelace card JS and auto-register it (only once)
+    if f"{DOMAIN}_card_registered" not in hass.data:
+        hass.data[f"{DOMAIN}_card_registered"] = True
+        card_path = str(CARD_DIR / CARD_FILENAME)
+        await hass.http.async_register_static_paths(
+            [StaticPathConfig(CARD_URL, card_path, cache_headers=False)]
+        )
+        add_extra_js_url(hass, CARD_URL)
 
     async def handle_set_curve(call: ServiceCall) -> None:
         entry_id = call.data["entry_id"]
