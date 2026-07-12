@@ -1,7 +1,7 @@
 {
   "domain": "charging_power_calculator",
   "name": "Charging Power Calculator",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "config_flow": true,
   "documentation": "https://github.com/AnSc1172/charging-power-calculator",
   "issue_tracker": "https://github.com/AnSc1172/charging-power-calculator/issues",
