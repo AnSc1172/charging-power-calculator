@@ -1,0 +1,28 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Charging Power Calculator",
+        "description": "Configure the input sensors and parameters for the surplus power calculation.",
+        "data": {
+          "grid_power": "Grid Power Sensor",
+          "ev_charging_power": "EV Charging Power Sensor",
+          "house_battery_power": "House Battery Power Sensor",
+          "current_charging_on": "Charging Active Sensor",
+          "max_charging_power_house_battery": "Max Battery Charging Power (W)",
+          "min_charging_power_ev": "Min EV Charging Power (W)",
+          "fine_adjust": "Fine Adjust Offset (W)"
+        },
+        "data_description": {
+          "grid_power": "Positive = importing from grid, negative = exporting to grid",
+          "ev_charging_power": "Current power consumption of the EV charger",
+          "house_battery_power": "Current charging power of the house battery",
+          "current_charging_on": "Binary sensor indicating if the charger is currently active",
+          "max_charging_power_house_battery": "Power to reserve for the house battery before allocating to EV",
+          "min_charging_power_ev": "Minimum power to start/maintain EV charging",
+          "fine_adjust": "Manual offset to bias the charging setpoint (positive = more aggressive)"
+        }
+      }
+    }
+  }
+}
