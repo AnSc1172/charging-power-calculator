@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from homeassistant.components.binary_sensor import BinarySensorEntity
+from homeassistant.helpers.device_registry import DeviceEntryType
+from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
@@ -37,6 +39,8 @@ async def async_setup_entry(
 class ChargingPowerBinarySensor(
     CoordinatorEntity[ChargingPowerCoordinator], BinarySensorEntity
 ):
+    _attr_has_entity_name = True
+
     def __init__(
         self,
         coordinator: ChargingPowerCoordinator,
@@ -48,6 +52,12 @@ class ChargingPowerBinarySensor(
         self._attr_name = name
         self._key = key
         self._attr_unique_id = f"{entry_id}_{key}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry_id)},
+            name="Charging Power Calculator",
+            manufacturer="Custom",
+            entry_type=DeviceEntryType.SERVICE,
+        )
 
     @property
     def is_on(self) -> bool:
