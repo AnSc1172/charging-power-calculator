@@ -1,0 +1,252 @@
+# Charging Power Calculator — Home Assistant Custom Integration
+
+## Overview
+
+This integration calculates the optimal EV charging power based on available solar surplus. It determines whether to charge, at what power level, and whether to use 1-phase or 3-phase charging — all to maximize self-consumption of solar energy while avoiding grid import.
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Home Assistant                                          │
+│                                                         │
+│  ┌──────────────┐         ┌──────────────────────────┐  │
+│  │ Input Sensors│────────▶│ ChargingPowerCoordinator │  │
+│  │  - grid_power│         │   (runs every 31s)       │  │
+│  │  - ev_power  │         └────────────┬─────────────┘  │
+│  │  - battery   │                      │                │
+│  │  - charging  │                      ▼                │
+│  └──────────────┘         ┌──────────────────────────┐  │
+│                           │ Output Entities           │  │
+│                           │  - setpoint_power (W)     │  │
+│                           │  - setpoint_ampere (A)    │  │
+│                           │  - surplus_power (W)      │  │
+│                           │  - charging_on (bool)     │  │
+│                           │  - is_1_phase (bool)      │  │
+│                           └──────────────────────────┘  │
+└─────────────────────────────────────────────────────────┘
+```
+
+## Configuration Inputs
+
+| Parameter | Entity Type | Description |
+|-----------|-------------|-------------|
+| `grid_power` | sensor | Grid power in Watts (positive = importing, negative = exporting) |
+| `ev_charging_power` | sensor | Current EV charging power in Watts |
+| `house_battery_power` | sensor | House battery charging power in Watts (positive = charging battery) |
+| `current_charging_on` | binary_sensor / input_boolean | Whether the EV charger is currently active |
+| `max_charging_power_house_battery` | number (default: 2500 W) | Reserved power for house battery |
+| `min_charging_power_ev` | number (default: 1400 W) | Minimum EV charging power (~6A single phase) |
+| `fine_adjust` | number (default: 500 W) | Manual bias/offset to tweak the setpoint |
+
+## Output Entities
+
+| Entity | Type | Unit | Description |
+|--------|------|------|-------------|
+| Setpoint EV Charging Power | sensor | W | Recommended EV charging power |
+| Setpoint Ampere | sensor | A | Recommended current per phase |
+| Surplus Power Available | sensor | W | Calculated total surplus |
+| Setpoint Charging On | binary_sensor | — | Whether EV charging should be ON |
+| Is 1 Phase Charging | binary_sensor | — | Whether to use 1-phase (vs 3-phase) |
+
+## Constants
+
+| Name | Value | Description |
+|------|-------|-------------|
+| `UPDATE_INTERVAL` | 31 s | Polling / calculation interval |
+| `VOLTAGE` | 230 V | Mains voltage (EU) |
+| `AMPERE_MIN` | 6 A | Minimum charging current (EV standard) |
+| `AMPERE_MAX` | 16 A | Maximum charging current |
+| `START_EXPORT_THRESHOLD` | -500 W | Grid export must exceed 500 W to start |
+| `START_EXPORT_SECONDS` | 60 s | Export must persist for 60 s before starting |
+| `STOP_SETPOINT_SECONDS` | 60 s | Negative setpoint must persist 60 s before stopping |
+| `PHASE_SWITCH_UP_W` | 3500 W | Switch from 1-phase to 3-phase above this |
+| `PHASE_SWITCH_DOWN_W` | 3000 W | Switch from 3-phase to 1-phase below this |
+| `PHASE_SWITCH_PAUSE` | 90 s | Pause after phase switching (charger needs time) |
+
+## Core Algorithm — Pseudocode
+
+```
+FUNCTION calculate_surplus_and_setpoint():
+    // ──────────────────────────────────────────────
+    // STEP 1: Read sensor inputs
+    // ──────────────────────────────────────────────
+    grid_power       ← read sensor (+ = importing from grid, − = exporting)
+    ev_power         ← read sensor (current EV consumption)
+    battery_power    ← read sensor (house battery charge power)
+    charging_on      ← read sensor (is EV charger currently active?)
+
+    IF any input is unavailable:
+        RETURN last known values (no update)
+
+    // ──────────────────────────────────────────────
+    // STEP 2: Calculate surplus power
+    // ──────────────────────────────────────────────
+    // Surplus = what we're exporting + what battery is taking + what EV is already using
+    // This represents the total "available solar" that could go to EV charging
+    surplus ← −grid_power + battery_power + ev_power
+
+    // Interpretation:
+    //   grid_power = -1000 (exporting 1kW)
+    //   battery_power = 2000 (battery charging 2kW)
+    //   ev_power = 3000 (EV already drawing 3kW)
+    //   → surplus = 1000 + 2000 + 3000 = 6000 W available for EV
+
+    // ──────────────────────────────────────────────
+    // STEP 3: Phase-switch pause guard
+    // ──────────────────────────────────────────────
+    IF currently in phase-switch pause period:
+        RETURN last values unchanged (wait 90s for charger to stabilize)
+
+    // ──────────────────────────────────────────────
+    // STEP 4: Determine charging setpoint
+    // ──────────────────────────────────────────────
+    setpoint ← 0
+
+    IF charger is NOT currently active:
+        // --- START condition ---
+        IF grid_power < −500 W (exporting more than 500W):
+            start tracking "export duration"
+        ELSE:
+            reset "export duration" timer
+
+        IF export has persisted for ≥ 60 seconds:
+            setpoint ← min_ev_power (start at minimum, e.g. 1400 W)
+
+    ELSE (charger IS active):
+        // --- RUNNING condition ---
+        setpoint ← surplus − max_battery_power + fine_adjust
+
+        // Explanation:
+        //   We subtract max_battery_power to "reserve" that capacity for the house battery.
+        //   We add fine_adjust as a user-configurable bias.
+        //
+        // Example:
+        //   surplus = 6000 W, max_battery = 2500 W, fine_adjust = 500 W
+        //   → setpoint = 6000 − 2500 + 500 = 4000 W for EV
+
+    // ──────────────────────────────────────────────
+    // STEP 5: Apply minimum threshold & stop logic
+    // ──────────────────────────────────────────────
+    IF setpoint > 0:
+        IF setpoint < min_ev_power:
+            setpoint ← min_ev_power   // Never go below minimum charging power
+        charging_on ← TRUE
+        reset "stop timer"
+
+    ELSE IF setpoint < 0:
+        // --- STOP condition (with hysteresis) ---
+        start tracking "negative setpoint duration"
+        IF negative setpoint has persisted for ≥ 60 seconds:
+            charging_on ← FALSE
+
+    ELSE (setpoint == 0):
+        reset "stop timer"
+
+    // ──────────────────────────────────────────────
+    // STEP 6: Decide phase count (1-phase vs 3-phase)
+    // ──────────────────────────────────────────────
+    phase ← current_phase  // keep current by default (hysteresis band)
+
+    IF setpoint < 3000 W:
+        phase ← 1
+    ELSE IF setpoint > 3500 W:
+        phase ← 3
+    // Between 3000–3500 W: keep current phase (avoids oscillation)
+
+    // ──────────────────────────────────────────────
+    // STEP 7: Calculate ampere from setpoint
+    // ──────────────────────────────────────────────
+    IF charging_on AND setpoint > 0:
+        // Safety check: 1-phase can't exceed 3680 W (230V × 16A)
+        IF phase == 1 AND setpoint > 3680 W:
+            phase ← 3
+
+        watts_per_amp ← 230 V × phase_count
+        ampere ← CEIL(setpoint / watts_per_amp)
+        ampere ← CLAMP(ampere, 6, 16)
+
+    // ──────────────────────────────────────────────
+    // STEP 8: Handle phase switching pause
+    // ──────────────────────────────────────────────
+    IF phase has changed from last cycle:
+        pause_until ← now + 90 seconds
+        // Next cycles will skip calculation until pause expires
+
+    // ──────────────────────────────────────────────
+    // STEP 9: Output results
+    // ──────────────────────────────────────────────
+    RETURN:
+        surplus_power       → surplus
+        setpoint_power      → max(0, setpoint) if charging_on, else 0
+        setpoint_ampere     → ampere
+        charging_on         → charging_on
+        phase_count         → phase
+        is_1_phase          → (phase == 1)
+```
+
+## Algorithm Key Concepts
+
+### Surplus Power Formula
+
+```
+surplus = −grid_power + house_battery_power + ev_power
+```
+
+This "reconstructs" total available solar by adding back what the EV and battery are already consuming to the current export. It answers: *"If we turned off EV and battery, how much would we be exporting?"*
+
+### Setpoint (while charging)
+
+```
+setpoint = surplus − max_battery_power + fine_adjust
+```
+
+- **`−max_battery_power`**: Reserves capacity for the house battery to charge (priority over EV).
+- **`+fine_adjust`**: User-tunable offset. Positive = more aggressive (may pull small amounts from grid). Negative = more conservative (leaves more surplus unused).
+
+### Hysteresis / Debouncing
+
+The algorithm uses time-based hysteresis to avoid rapid toggling:
+
+| Transition | Condition | Hold Time |
+|------------|-----------|-----------|
+| OFF → ON | Grid export > 500 W | Must hold for 60 s |
+| ON → OFF | Setpoint negative | Must hold for 60 s |
+| Phase switch | Setpoint crosses band | 90 s pause after switch |
+
+### Phase Switching Band
+
+```
+        1-phase          hysteresis band         3-phase
+    ◄──────────────┤ 3000 W ════════ 3500 W ├──────────────►
+```
+
+The 500 W dead-band prevents oscillation when the surplus hovers around the switching point.
+
+## File Structure
+
+```
+charging_power_calculator/
+├── __init__.py          # HA entry setup/teardown
+├── coordinator.py       # Core algorithm (DataUpdateCoordinator)
+├── sensor.py            # Sensor entities (power, ampere, surplus)
+├── binary_sensor.py     # Binary sensor entities (on/off, phase)
+├── config_flow.py       # UI configuration flow
+├── const.py             # Constants and defaults
+├── manifest.json        # Integration metadata
+├── strings.json         # UI strings
+└── translations/
+    └── en.json          # English translations
+```
+
+## Example Scenario
+
+| Time | Grid | Battery | EV | Surplus | Setpoint | Action |
+|------|------|---------|----|---------|----------|--------|
+| 12:00 | -800 W | 2000 W | 0 W | 2800 W | — | Export detected, start timer |
+| 12:01 | -600 W | 2000 W | 0 W | 2600 W | 1400 W | Timer hit 60s → start at min |
+| 12:02 | -100 W | 2000 W | 1400 W | 3500 W | 1500 W | Running: 3500−2500+500 |
+| 12:03 | -500 W | 2000 W | 1500 W | 4000 W | 2000 W | Ramp up |
+| 12:04 | -1000 W | 2500 W | 2000 W | 5500 W | 3500 W | Ramp up more |
+| 12:05 | -1200 W | 2500 W | 3500 W | 7200 W | 5200 W | Switch to 3-phase, pause 90s |
+| 12:07 | +200 W | 1000 W | 5200 W | 6000 W | 4000 W | After pause, adjust down |

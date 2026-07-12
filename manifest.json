@@ -1,0 +1,10 @@
+{
+  "domain": "charging_power_calculator",
+  "name": "Charging Power Calculator",
+  "version": "0.1.0",
+  "config_flow": true,
+  "documentation": "",
+  "requirements": [],
+  "codeowners": [],
+  "iot_class": "local_polling"
+}

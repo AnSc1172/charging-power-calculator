@@ -1,0 +1,10 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Charging Power Calculator",
+        "description": "Connect the input sensors and constants for the charging power calculation."
+      }
+    }
+  }
+}
