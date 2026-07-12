@@ -1,5 +1,5 @@
 DOMAIN = "charging_power_calculator"
-PLATFORMS = ["sensor", "binary_sensor"]
+PLATFORMS = ["sensor", "binary_sensor", "number"]
 
 CONF_GRID_POWER = "grid_power"
 CONF_EV_POWER = "ev_charging_power"
